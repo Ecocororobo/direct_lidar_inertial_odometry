@@ -65,7 +65,8 @@ namespace dlio {
     std::uint32_t t;   // (Ouster) time since beginning of scan in nanoseconds
     float time;        // (Velodyne) time since beginning of scan in seconds
     double timestamp;  // (Hesai) absolute timestamp in seconds
-                       // (Livox) absolute timestamp in (seconds * 10e9)
+                       // (Livox PointCloud2) absolute nanoseconds
+                       // (Livox CustomMsg adapter) relative nanoseconds
     };
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   } EIGEN_ALIGN16;

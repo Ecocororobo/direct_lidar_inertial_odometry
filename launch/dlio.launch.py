@@ -14,14 +14,17 @@ from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from launch_ros.parameter_descriptions import ParameterValue
 
 def generate_launch_description():
     current_pkg = FindPackageShare('direct_lidar_inertial_odometry')
 
     # Set default arguments
     rviz = LaunchConfiguration('rviz', default='false')
-    pointcloud_topic = LaunchConfiguration('pointcloud_topic', default='points_raw')
-    imu_topic = LaunchConfiguration('imu_topic', default='imu_raw')
+    pointcloud_topic = LaunchConfiguration('pointcloud_topic', default='/livox/lidar')
+    imu_topic = LaunchConfiguration('imu_topic', default='/livox/imu')
+    pointcloud_format = LaunchConfiguration('pointcloud_format')
+    use_sim_time = LaunchConfiguration('use_sim_time')
 
     # Define arguments
     declare_rviz_arg = DeclareLaunchArgument(
@@ -49,7 +52,10 @@ def generate_launch_description():
         package='direct_lidar_inertial_odometry',
         executable='dlio_odom_node',
         output='screen',
-        parameters=[dlio_yaml_path, dlio_params_yaml_path],
+        parameters=[dlio_yaml_path, dlio_params_yaml_path, {
+            'pointcloud/format': pointcloud_format,
+            'use_sim_time': ParameterValue(use_sim_time, value_type=bool),
+        }],
         remappings=[
             ('pointcloud', pointcloud_topic),
             ('imu', imu_topic),
@@ -67,7 +73,9 @@ def generate_launch_description():
         package='direct_lidar_inertial_odometry',
         executable='dlio_map_node',
         output='screen',
-        parameters=[dlio_yaml_path, dlio_params_yaml_path],
+        parameters=[dlio_yaml_path, dlio_params_yaml_path, {
+            'use_sim_time': ParameterValue(use_sim_time, value_type=bool),
+        }],
         remappings=[
             ('keyframes', 'dlio/odom_node/pointcloud/keyframe'),
         ],
@@ -80,11 +88,15 @@ def generate_launch_description():
         executable='rviz2',
         name='dlio_rviz',
         arguments=['-d', rviz_config_path],
+        parameters=[{'use_sim_time': ParameterValue(use_sim_time, value_type=bool)}],
         output='screen',
         condition=IfCondition(LaunchConfiguration('rviz'))
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument('pointcloud_format', default_value='pointcloud2',
+                              choices=['pointcloud2', 'custom']),
+        DeclareLaunchArgument('use_sim_time', default_value='false'),
         declare_rviz_arg,
         declare_pointcloud_topic_arg,
         declare_imu_topic_arg,

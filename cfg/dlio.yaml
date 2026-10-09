@@ -19,6 +19,10 @@
 
     pointcloud/deskew: true
     pointcloud/voxelize: true
+    pointcloud/format: pointcloud2
+    pointcloud/sensor: livox
+    # Official livox_ros_driver2 forwards acceleration in g.
+    imu/accelInG: true
 
     imu/calibration: true
     imu/intrinsics/accel/bias: [ 0.0, 0.0, 0.0 ]
@@ -27,7 +31,9 @@
                                  0.,  0.,  1. ]
     imu/intrinsics/gyro/bias: [ 0.0, 0.0, 0.0 ]
 
-    extrinsics/baselink2imu/t: [ 0.006253, -0.011775, 0.007645 ] 
+    # Placeholder: replace with measured MID360S IMU-to-base extrinsics.
+    # The old sensor's translation is not a MID360S calibration.
+    extrinsics/baselink2imu/t: [ 0.0, 0.0, 0.0 ]
     extrinsics/baselink2imu/R: [ 1.,  0.,  0.,
                                  0.,  1.,  0.,
                                  0.,  0.,  1. ]

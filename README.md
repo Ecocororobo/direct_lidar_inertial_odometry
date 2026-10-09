@@ -11,6 +11,68 @@ DLIO is a new lightweight LiDAR-inertial odometry algorithm with a novel coarse-
 
 ## Instructions
 
+### ROS 2 / Livox MID360S
+
+This branch is based on `feature/ros2`, with the Livox CustomMsg input ported
+from the behavior of `feature/livox-support`. It accepts one selected input
+format at a time. PointCloud2 is the default: the official
+[livox_ros_driver2](https://github.com/Livox-SDK/livox_ros_driver2) publishes
+per-point `timestamp` values in nanoseconds with `xfer_format=0`, so deskewing
+does not require CustomMsg. XYZ-only clouds are unsuitable for deskewing.
+Use `xfer_format=1` and `pointcloud_format=custom` when using CustomMsg bags
+or a pipeline that needs Livox's `tag`/`line` fields. DLIO currently uses
+coordinates, reflectivity and time; it does not filter by tag or line.
+
+Build Livox SDK2 and a MID360S-capable ROS 2 version of `livox_ros_driver2`
+following its upstream instructions, then build this branch in the sourced
+workspace. `livox_ros_driver2` is a build dependency even in PointCloud2 mode.
+
+```sh
+git clone -b feature/ros2-livox-support https://github.com/Ecocororobo/direct_lidar_inertial_odometry.git ~/ros2_ws/src/direct_lidar_inertial_odometry
+cd ~/ros2_ws
+colcon build --symlink-install --packages-up-to direct_lidar_inertial_odometry
+source install/setup.bash
+```
+
+Before starting, edit `cfg/MID360s_config.json`: `host_ip=192.168.1.5` and
+LiDAR `ip=192.168.1.12` are example addresses, not detected device settings.
+The `Mid360s` device key and ports follow the upstream MID360S configuration.
+Alternatively pass `user_config_path:=/absolute/path/to/MID360s_config.json`.
+Keep driver extrinsics zero and apply calibration in DLIO to avoid applying
+the transform twice.
+
+```sh
+# Terminal 1: PointCloud2, 10 Hz, /livox/lidar and /livox/imu
+ros2 launch direct_lidar_inertial_odometry mid360s_driver.launch.py
+# Terminal 2
+ros2 launch direct_lidar_inertial_odometry dlio.launch.py rviz:=true
+
+# For CustomMsg instead, restart both nodes with matching selections:
+ros2 launch direct_lidar_inertial_odometry mid360s_driver.launch.py xfer_format:=1
+ros2 launch direct_lidar_inertial_odometry dlio.launch.py pointcloud_format:=custom rviz:=true
+```
+
+Set `extrinsics/baselink2lidar/*` and `extrinsics/baselink2imu/*` in
+`cfg/dlio.yaml` to measured transforms in metres and rotation matrices.
+Identity/zero defaults are placeholders, including the internal IMU offset;
+they are not a verified MID360S calibration. The integrated IMU output of the
+official driver uses acceleration in g: `imu/accelInG=true` converts it to
+m/s² before the lever-arm correction. Set it false for an IMU driver that
+already outputs m/s². Keep the sensor stationary for the initial 3 seconds.
+
+Live operation defaults to `use_sim_time=false`. For bags, launch DLIO with
+`use_sim_time:=true` and play with `ros2 bag play BAG --clock`. Preserve the
+LiDAR/IMU shared timestamps. `odom/computeTimeOffset=false` preserves timing
+even when cropping removes the first point. Sensor subscribers use best-effort
+SensorDataQoS. Initial crop half-size is 0.1 m and voxel size is 0.25 m;
+tune these for your mounting and environment after validating calibration.
+
+Check `ros2 topic info /livox/lidar -v` for the selected message type and QoS,
+and check `/livox/imu` while stationary: acceleration magnitude should be
+about 1 g before DLIO conversion. Confirm deskewed clouds and odometry with
+a slow motion bag before tuning registration. This change has not yet been
+compiled or validated with a MID360S on hardware.
+
 ### Sensor Setup
 DLIO has been extensively tested using a variety of sensor configurations and currently supports Ouster, Velodyne, and Hesai LiDARs. The point cloud should be of input type `sensor_msgs::PointCloud2` and the 6-axis IMU input type of `sensor_msgs::Imu`.
 
@@ -38,13 +100,13 @@ sudo apt install libomp-dev libpcl-dev libeigen3-dev
 DLIO currently supports `ROS 1` and `ROS 2`!
 
 ### Compiling
-Compile using the [`catkin_tools`](https://catkin-tools.readthedocs.io/en/latest/) package via:
+Compile using `colcon` (build and source `livox_ros_driver2` first):
 
 ```sh
 mkdir ~/ros2_ws && cd ~/ros2_ws && mkdir src && cd src
 ```
 ```sh
-git clone https://github.com/vectr-ucla/direct_lidar_inertial_odometry -b feature/ros2
+git clone https://github.com/Ecocororobo/direct_lidar_inertial_odometry -b feature/ros2-livox-support
 ```
 ```sh
 cd ~/ros2_ws
@@ -66,7 +128,7 @@ source ~/ros2_ws/install/setup.bash
 Execute via:
 
 ```sh
-roslaunch direct_lidar_inertial_odometry dlio.launch \
+ros2 launch direct_lidar_inertial_odometry dlio.launch.py \
   rviz:={true, false} \
   pointcloud_topic:=/robot/lidar \
   imu_topic:=/robot/imu

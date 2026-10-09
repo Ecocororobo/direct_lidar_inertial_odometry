@@ -20,6 +20,7 @@
 #include <nav_msgs/msg/path.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <livox_ros_driver2/msg/custom_msg.hpp>
 #include <tf2_ros/transform_broadcaster.h>
 
 // BOOST
@@ -55,6 +56,7 @@ private:
   void getParams();
 
   void callbackPointCloud(const sensor_msgs::msg::PointCloud2::SharedPtr pc);
+  void callbackLivox(const livox_ros_driver2::msg::CustomMsg::SharedPtr pc);
   void callbackImu(const sensor_msgs::msg::Imu::SharedPtr imu);
 
   void publishPose();
@@ -112,6 +114,7 @@ private:
 
   // Subscribers
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_sub;
+  rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr livox_sub;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub;
   rclcpp::CallbackGroup::SharedPtr lidar_cb_group, imu_cb_group;
 
@@ -312,6 +315,9 @@ private:
   int num_threads_;
 
   bool deskew_;
+  std::string pointcloud_format_;
+  std::string sensor_model_;
+  bool imu_accel_in_g_;
 
   double gravity_;
 

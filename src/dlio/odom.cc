@@ -14,6 +14,7 @@
 #include "dlio/utils.h"
 
 #include <queue>
+#include <stdexcept>
 
 #include "rclcpp/qos.hpp"
 
@@ -34,8 +35,17 @@ dlio::OdomNode::OdomNode() : Node("dlio_odom_node") {
   this->lidar_cb_group = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   auto lidar_sub_opt = rclcpp::SubscriptionOptions();
   lidar_sub_opt.callback_group = this->lidar_cb_group;
-  this->lidar_sub = this->create_subscription<sensor_msgs::msg::PointCloud2>("pointcloud", 1,
-      std::bind(&dlio::OdomNode::callbackPointCloud, this, std::placeholders::_1), lidar_sub_opt);
+  if (this->pointcloud_format_ == "custom") {
+    this->livox_sub = this->create_subscription<livox_ros_driver2::msg::CustomMsg>(
+        "pointcloud", rclcpp::SensorDataQoS().keep_last(1),
+        std::bind(&dlio::OdomNode::callbackLivox, this, std::placeholders::_1), lidar_sub_opt);
+  } else if (this->pointcloud_format_ == "pointcloud2") {
+    this->lidar_sub = this->create_subscription<sensor_msgs::msg::PointCloud2>(
+        "pointcloud", rclcpp::SensorDataQoS().keep_last(1),
+        std::bind(&dlio::OdomNode::callbackPointCloud, this, std::placeholders::_1), lidar_sub_opt);
+  } else {
+    throw std::invalid_argument("pointcloud/format must be pointcloud2 or custom");
+  }
 
   this->imu_cb_group = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   auto imu_sub_opt = rclcpp::SubscriptionOptions();
@@ -190,6 +200,12 @@ void dlio::OdomNode::getParams() {
 
   // Deskew Flag
   dlio::declare_param(this, "pointcloud/deskew", this->deskew_, true);
+  dlio::declare_param(this, "pointcloud/format", this->pointcloud_format_, "pointcloud2");
+  dlio::declare_param(this, "pointcloud/sensor", this->sensor_model_, "auto");
+  dlio::declare_param(this, "imu/accelInG", this->imu_accel_in_g_, false);
+  if (this->sensor_model_ != "auto" && this->sensor_model_ != "livox") {
+    throw std::invalid_argument("pointcloud/sensor must be auto or livox");
+  }
 
   // Gravity
   dlio::declare_param(this, "odom/gravity", this->gravity_, 9.80665);
@@ -508,16 +524,21 @@ void dlio::OdomNode::getScanFromROS(const sensor_msgs::msg::PointCloud2::SharedP
   // automatically detect sensor type
   this->sensor = dlio::SensorType::UNKNOWN;
   for (auto &field : pc->fields) {
+    if (field.name == "timestamp" &&
+        (this->sensor_model_ == "livox" || this->pointcloud_format_ == "custom")) {
+      this->sensor = dlio::SensorType::LIVOX;
+      break;
+    }
     if (field.name == "t") {
       this->sensor = dlio::SensorType::OUSTER;
       break;
     } else if (field.name == "time") {
       this->sensor = dlio::SensorType::VELODYNE;
       break;
-    } else if (field.name == "timestamp" && original_scan_->points[0].timestamp < 1e14) {
+    } else if (field.name == "timestamp" && !original_scan_->empty() && original_scan_->points[0].timestamp < 1e14) {
       this->sensor = dlio::SensorType::HESAI;
       break;
-    } else if (field.name == "timestamp" && original_scan_->points[0].timestamp > 1e14) {
+    } else if (field.name == "timestamp" && !original_scan_->empty() && original_scan_->points[0].timestamp >= 1e14) {
       this->sensor = dlio::SensorType::LIVOX;
       break;
     }
@@ -639,8 +660,9 @@ void dlio::OdomNode::deskewPointcloud() {
     point_time_neq = [](boost::range::index_value<PointType&, long> p1,
                         boost::range::index_value<PointType&, long> p2)
       { return p1.value().timestamp != p2.value().timestamp; };
-    extract_point_time = [&sweep_ref_time](boost::range::index_value<PointType&, long> pt)
-      { return pt.value().timestamp * 1e-9f; };
+    extract_point_time = [this, &sweep_ref_time](boost::range::index_value<PointType&, long> pt)
+      { return pt.value().timestamp * 1e-9 +
+          (this->pointcloud_format_ == "custom" ? sweep_ref_time : 0.0); };
   }
 
   // copy points into deskewed_scan_ in order of timestamp
@@ -754,6 +776,36 @@ void dlio::OdomNode::initializeDLIO() {
 
 }
 
+void dlio::OdomNode::callbackLivox(const livox_ros_driver2::msg::CustomMsg::SharedPtr pc) {
+  if (pc->point_num != pc->points.size() || pc->points.empty()) {
+    RCLCPP_WARN(this->get_logger(), "Skipping empty or inconsistent Livox scan");
+    return;
+  }
+  pcl::PointCloud<PointType> cloud;
+  cloud.reserve(pc->points.size());
+  for (const auto& source : pc->points) {
+    PointType point;
+    point.x = source.x;
+    point.y = source.y;
+    point.z = source.z;
+    point.intensity = source.reflectivity;
+    // Keep nanoseconds relative to the message header: no loss of precision
+    // from adding the offset to a large epoch timestamp.
+    point.timestamp = static_cast<double>(source.offset_time);
+    cloud.push_back(point);
+  }
+  auto converted = std::make_shared<sensor_msgs::msg::PointCloud2>();
+  pcl::toROSMsg(cloud, *converted);
+  // PointType registers overlapping time fields; expose only the active one.
+  converted->fields.erase(std::remove_if(converted->fields.begin(), converted->fields.end(),
+      [](const sensor_msgs::msg::PointField& field) {
+        return field.name == "t" || field.name == "time";
+      }), converted->fields.end());
+  converted->header = pc->header;
+  converted->header.stamp = rclcpp::Time(static_cast<int64_t>(pc->timebase));
+  this->callbackPointCloud(converted);
+}
+
 void dlio::OdomNode::callbackPointCloud(const sensor_msgs::msg::PointCloud2::SharedPtr pc) {
 
   std::unique_lock<decltype(this->main_loop_running_mutex)> lock(main_loop_running_mutex);
@@ -773,6 +825,10 @@ void dlio::OdomNode::callbackPointCloud(const sensor_msgs::msg::PointCloud2::Sha
 
   // Convert incoming scan into DLIO format
   this->getScanFromROS(pc);
+  if (this->original_scan->empty()) {
+    RCLCPP_WARN(this->get_logger(), "Skipping scan with no points after filtering");
+    return;
+  }
 
   // Preprocess points
   this->preprocessPoints();
@@ -1395,6 +1451,10 @@ sensor_msgs::msg::Imu::SharedPtr dlio::OdomNode::transformImu(const sensor_msgs:
   Eigen::Vector3f lin_accel(imu_raw->linear_acceleration.x,
                             imu_raw->linear_acceleration.y,
                             imu_raw->linear_acceleration.z);
+  // Convert before applying the lever-arm correction, whose units are m/s^2.
+  if (this->imu_accel_in_g_) {
+    lin_accel *= this->gravity_;
+  }
 
   Eigen::Vector3f lin_accel_cg = this->extrinsics.baselink2imu.R * lin_accel;
 
